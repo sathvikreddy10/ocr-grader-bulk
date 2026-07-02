@@ -1088,10 +1088,42 @@ export default function Home() {
                       student.result && student.result.maxTotalScore > 0
                         ? (student.result.totalScore / student.result.maxTotalScore) * 100
                         : 0;
+                    const isExpanded = expandedStudent === student.id;
                     return (
-                      <tr key={student.id}>
+                      <tr
+                        key={student.id}
+                        onClick={() =>
+                          student.status === "done" &&
+                          setExpandedStudent(isExpanded ? null : student.id)
+                        }
+                        className={clsx(
+                          "transition-colors",
+                          student.status === "done" &&
+                            "cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-950"
+                        )}
+                      >
                         <td className="px-6 py-4 font-medium text-zinc-900 dark:text-zinc-100">
-                          {student.name}
+                          <div className="flex items-center gap-2">
+                            {student.status === "done" && (
+                              <svg
+                                className={clsx(
+                                  "h-4 w-4 text-zinc-400 transition-transform",
+                                  isExpanded && "rotate-90"
+                                )}
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M9 5l7 7-7 7"
+                                />
+                              </svg>
+                            )}
+                            {student.name}
+                          </div>
                         </td>
                         <td className="px-6 py-4 text-zinc-700 dark:text-zinc-300">
                           {student.result ? (
@@ -1120,17 +1152,13 @@ export default function Home() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <button
-                            onClick={() =>
-                              setExpandedStudent(
-                                expandedStudent === student.id ? null : student.id
-                              )
-                            }
-                            disabled={student.status !== "done"}
-                            className="text-sm font-semibold text-indigo-600 hover:text-indigo-500 disabled:text-zinc-400"
-                          >
-                            {expandedStudent === student.id ? "Hide" : "Breakdown"}
-                          </button>
+                          {student.status === "done" ? (
+                            <span className="text-sm font-semibold text-indigo-600">
+                              {isExpanded ? "Hide" : "Breakdown"}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-zinc-400">—</span>
+                          )}
                         </td>
                       </tr>
                     );
