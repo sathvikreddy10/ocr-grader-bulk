@@ -169,6 +169,16 @@ function DropZone({
   );
 }
 
+async function parseApiError(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const json = JSON.parse(text);
+    return json.error || json.message || text;
+  } catch {
+    return text || `HTTP ${response.status} ${response.statusText}`;
+  }
+}
+
 async function convertPdfToImages(file: File, prefix: string): Promise<File[]> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -177,22 +187,29 @@ async function convertPdfToImages(file: File, prefix: string): Promise<File[]> {
   const pdf = await pdfjs.getDocument({ data: buffer }).promise;
   const images: File[] = [];
 
+  const MAX_DIMENSION = 1200;
+  const JPEG_QUALITY = 0.75;
+
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
-    const scale = 1.5;
-    const viewport = page.getViewport({ scale });
+    const viewport = page.getViewport({ scale: 1 });
+
+    // Scale down if page is larger than MAX_DIMENSION to keep payload small.
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(viewport.width, viewport.height));
+    const scaledViewport = page.getViewport({ scale });
+
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     if (!ctx) continue;
 
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+    canvas.width = scaledViewport.width;
+    canvas.height = scaledViewport.height;
+    await page.render({ canvasContext: ctx, viewport: scaledViewport, canvas }).promise;
 
     const blob = await new Promise<Blob>((resolve) => {
-      canvas.toBlob((b) => resolve(b!), "image/png", 1);
+      canvas.toBlob((b) => resolve(b!), "image/jpeg", JPEG_QUALITY);
     });
-    images.push(new File([blob], `${prefix}-${i}.png`, { type: "image/png" }));
+    images.push(new File([blob], `${prefix}-${i}.jpg`, { type: "image/jpeg" }));
   }
 
   return images;
@@ -298,10 +315,10 @@ export default function Home() {
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to extract question paper.");
+        throw new Error(await parseApiError(response));
       }
+      const data = await response.json();
       setPaper(data);
       setPaperName(data.title || paperFile?.name.replace(/\.pdf$/i, "") || "Untitled Paper");
       setStep("review");
@@ -474,13 +491,13 @@ export default function Home() {
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to grade the answer script.");
+        throw new Error(await parseApiError(response));
       }
+      const data = (await response.json()) as GradeResult;
       setStudents((prev) =>
         prev.map((s) =>
-          s.id === student.id ? { ...s, status: "done", result: data as GradeResult } : s
+          s.id === student.id ? { ...s, status: "done", result: data } : s
         )
       );
     } catch (err) {
