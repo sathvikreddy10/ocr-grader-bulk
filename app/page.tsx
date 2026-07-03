@@ -102,6 +102,136 @@ function writeSavedPapers(papers: SavedPaper[]) {
   localStorage.setItem(SAVED_PAPERS_KEY, JSON.stringify(papers));
 }
 
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function generateReportHtml(student: StudentRecord): string {
+  if (!student.result) return "";
+  const percentage =
+    student.result.maxTotalScore > 0
+      ? ((student.result.totalScore / student.result.maxTotalScore) * 100).toFixed(1)
+      : "0.0";
+
+  const grouped = new Map<string, GradedQuestion[]>();
+  for (const q of student.result.questions) {
+    if (!grouped.has(q.section)) grouped.set(q.section, []);
+    grouped.get(q.section)!.push(q);
+  }
+
+  const sectionsHtml = Array.from(grouped.entries())
+    .map(
+      ([section, questions]) => `
+    <section style="margin-bottom: 32px;">
+      <h2 style="color: #4f46e5; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; margin-bottom: 16px;">${escapeHtml(
+        section
+      )}</h2>
+      ${questions
+        .map(
+          (q) => `
+        <div style="margin-bottom: 24px; padding: 16px; background: #f9fafb; border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin: 0; color: #111827;">Question ${escapeHtml(q.number)}</h3>
+            <span style="font-weight: bold; color: #4f46e5;">${q.score} / ${q.maxMarks}</span>
+          </div>
+          <p style="margin: 0 0 12px 0; color: #4b5563; font-style: italic;">${escapeHtml(
+            q.feedback
+          )}</p>
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead>
+              <tr style="background: #e5e7eb;">
+                <th style="text-align: left; padding: 8px; border: 1px solid #d1d5db;">Key Point</th>
+                <th style="text-align: center; padding: 8px; border: 1px solid #d1d5db; width: 80px;">Marks</th>
+                <th style="text-align: center; padding: 8px; border: 1px solid #d1d5db; width: 90px;">Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${q.keyPointResults
+                .map(
+                  (kp) => `
+                <tr>
+                  <td style="padding: 8px; border: 1px solid #d1d5db; vertical-align: top;">
+                    <div style="font-weight: 500;">${escapeHtml(kp.description)}</div>
+                    <div style="color: #6b7280; margin-top: 4px;">${escapeHtml(kp.reason)}</div>
+                    ${
+                      kp.evidence
+                        ? `<div style="color: #374151; margin-top: 6px; font-style: italic;">&quot;${escapeHtml(
+                            kp.evidence
+                          )}&quot;</div>`
+                        : ""
+                    }
+                  </td>
+                  <td style="text-align: center; padding: 8px; border: 1px solid #d1d5db;">${kp.awarded}/${kp.max}</td>
+                  <td style="text-align: center; padding: 8px; border: 1px solid #d1d5db;">${Math.round(
+                    kp.confidence ?? 0
+                  )}%</td>
+                </tr>
+              `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      `
+        )
+        .join("")}
+    </section>
+  `
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Evaluation Report - ${escapeHtml(student.name)}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 16px; color: #111827; line-height: 1.5; }
+    header { text-align: center; margin-bottom: 32px; }
+    .score-box { display: inline-block; padding: 16px 32px; background: #eef2ff; border-radius: 12px; margin-top: 12px; }
+    .score { font-size: 36px; font-weight: bold; color: #4f46e5; }
+    footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Evaluation Report</h1>
+    <p style="font-size: 18px; color: #4b5563; margin: 4px 0;">Student: <strong>${escapeHtml(
+      student.name
+    )}</strong></p>
+    <div class="score-box">
+      <div class="score">${student.result.totalScore} / ${student.result.maxTotalScore}</div>
+      <div style="color: #4b5563; margin-top: 4px;">${percentage}%</div>
+    </div>
+  </header>
+  ${sectionsHtml}
+  <footer>
+    If you believe any part of this evaluation is incorrect, please review the evidence quoted above and contact your instructor with specific question numbers.
+  </footer>
+</body>
+</html>`;
+}
+
+function downloadReport(student: StudentRecord) {
+  if (!student.result) return;
+  const html = generateReportHtml(student);
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${student.name.replace(/\s+/g, "_")}_evaluation.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
@@ -1153,9 +1283,20 @@ export default function Home() {
                         </td>
                         <td className="px-6 py-4">
                           {student.status === "done" ? (
-                            <span className="text-sm font-semibold text-indigo-600">
-                              {isExpanded ? "Hide" : "Breakdown"}
-                            </span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-semibold text-indigo-600">
+                                {isExpanded ? "Hide" : "Breakdown"}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  downloadReport(student);
+                                }}
+                                className="text-sm font-semibold text-emerald-600 hover:text-emerald-500"
+                              >
+                                Download
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-sm text-zinc-400">—</span>
                           )}
@@ -1178,9 +1319,17 @@ export default function Home() {
                         <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-50">
                           {student.name} — Breakdown
                         </h3>
-                        <span className="rounded-lg bg-indigo-100 px-3 py-1 text-sm font-bold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300">
-                          {student.result.totalScore} / {student.result.maxTotalScore}
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => downloadReport(student)}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500"
+                          >
+                            Download HTML Report
+                          </button>
+                          <span className="rounded-lg bg-indigo-100 px-3 py-1 text-sm font-bold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300">
+                            {student.result.totalScore} / {student.result.maxTotalScore}
+                          </span>
+                        </div>
                       </div>
                       {groupedQuestions(student).map(({ section, questions }) => (
                         <div key={section}>
