@@ -6,6 +6,16 @@ const baseUrl = process.env.MISTRAL_URL?.replace(/\/$/, "") ?? "https://api.mist
 const model = process.env.MISTRAL_MODEL ?? "pixtral-12b-2409";
 const apiKey = process.env.MISTRAL_API_KEY;
 
+interface KeyPoint {
+  description?: string;
+  marks?: number;
+}
+
+interface Question {
+  number?: string;
+  keyPoints?: KeyPoint[];
+}
+
 export async function POST(request: Request) {
   if (!apiKey) {
     return NextResponse.json(
@@ -50,11 +60,23 @@ export async function POST(request: Request) {
       })
     );
 
+    const keyPointSummary = (paper.questions ?? [])
+      .map(
+        (q: Question) =>
+          `Q${q.number}: ${(q.keyPoints ?? [])
+            .map((kp: KeyPoint) => `[${kp.marks} marks] ${kp.description}`)
+            .join("; ")}`
+      )
+      .join("\n");
+
     const prompt = `
 You are an experienced examiner grading a student's answer script. You must evaluate every answer STRICTLY against the key points provided in the question paper below.
 
 QUESTION PAPER (JSON):
 ${JSON.stringify(paper, null, 2)}
+
+KEY POINTS SUMMARY (use these as the only grading criteria):
+${keyPointSummary}
 
 The provided images are the pages of the student's answer script, in order.
 

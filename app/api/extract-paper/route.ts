@@ -37,38 +37,76 @@ function isValidPaper(paper: unknown): paper is Paper {
   return Array.isArray(p.sections) && Array.isArray(p.questions);
 }
 
-function scorePaper(paper: Paper): number {
+function hasBalancedKeyPoints(paper: Paper): boolean {
+  const questions = paper.questions ?? [];
+  for (const q of questions) {
+    const keyPoints = q.keyPoints ?? [];
+    const kpSum = keyPoints.reduce((sum, kp) => sum + (Number(kp.marks) || 0), 0);
+    const maxMarks = Number(q.maxMarks) || 0;
+    if (maxMarks > 0 && Math.abs(kpSum - maxMarks) > 0.01) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Create a structural signature based on sections + question numbers + max marks.
+// Runs with the same signature are considered to agree on the paper structure.
+function paperSignature(paper: Paper): string {
+  const sections = (paper.sections ?? [])
+    .map((s) => String(s.name ?? "").trim())
+    .filter(Boolean)
+    .join("|");
+  const questions = (paper.questions ?? [])
+    .map((q) => `${String(q.number ?? "").trim()}:${Number(q.maxMarks) || 0}:${String(q.section ?? "").trim()}`)
+    .join("|");
+  return `${sections}::${questions}`;
+}
+
+function totalMaxMarks(paper: Paper): number {
+  return (paper.questions ?? []).reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+}
+
+function scorePaperDetails(paper: Paper): number {
   let score = 0;
   const questions = paper.questions ?? [];
-  const sections = paper.sections ?? [];
-
-  score += sections.length * 5;
-  score += questions.length * 3;
 
   for (const q of questions) {
     const keyPoints = q.keyPoints ?? [];
-    if (keyPoints.length === 0) continue;
-
-    const kpSum = keyPoints.reduce((sum, kp) => sum + (Number(kp.marks) || 0), 0);
-    const maxMarks = Number(q.maxMarks) || 0;
-
-    // Strongly reward papers where key points sum exactly to maxMarks.
-    if (maxMarks > 0 && Math.abs(kpSum - maxMarks) < 0.01) {
-      score += 20;
-    } else if (maxMarks > 0) {
-      score += 5 - Math.min(5, Math.abs(kpSum - maxMarks));
-    }
-
-    // Reward granular but reasonable key points.
     if (keyPoints.length >= 2 && keyPoints.length <= 8) {
       score += keyPoints.length * 2;
     }
-
-    // Reward non-empty descriptions.
-    score += keyPoints.filter((kp) => typeof kp.description === "string" && kp.description.length > 0).length;
+    score += keyPoints.filter(
+      (kp) => typeof kp.description === "string" && kp.description.length > 0
+    ).length;
   }
 
   return score;
+}
+
+function pickBestPaper(results: Paper[]): Paper | null {
+  if (results.length === 0) return null;
+  if (results.length === 1) return results[0];
+
+  // 1. Keep only results where every question's maxMarks equals sum of key points.
+  const balanced = results.filter(hasBalancedKeyPoints);
+  const candidates = balanced.length > 0 ? balanced : results;
+
+  // 2. Group by structural signature and find the most common structure.
+  const groups = new Map<string, Paper[]>();
+  for (const paper of candidates) {
+    const sig = paperSignature(paper);
+    if (!groups.has(sig)) groups.set(sig, []);
+    groups.get(sig)!.push(paper);
+  }
+
+  const sortedGroups = Array.from(groups.entries()).sort((a, b) => b[1].length - a[1].length);
+  const largestGroup = sortedGroups[0][1];
+
+  // 3. Among the most common structure, pick the one with the most detailed / granular key points.
+  largestGroup.sort((a, b) => scorePaperDetails(b) - scorePaperDetails(a));
+
+  return largestGroup[0];
 }
 
 async function extractOnce(
@@ -200,7 +238,10 @@ export async function POST(request: Request) {
       Array.from({ length: RUNS }, (_, i) => extractOnce(imageParts, i + 1))
     );
 
-    const validResults = results.filter((r): r is { paper: Paper; tokens: { prompt: number; completion: number; total: number } } => r.paper !== null);
+    const validResults = results.filter(
+      (r): r is { paper: Paper; tokens: { prompt: number; completion: number; total: number } } =>
+        r.paper !== null
+    );
 
     if (validResults.length === 0) {
       return NextResponse.json(
@@ -209,29 +250,28 @@ export async function POST(request: Request) {
       );
     }
 
-    const scored = validResults.map((r) => ({
-      paper: r.paper,
-      score: scorePaper(r.paper),
-      tokens: r.tokens,
-    }));
+    const papers = validResults.map((r) => r.paper);
+    const best = pickBestPaper(papers);
 
-    scored.sort((a, b) => b.score - a.score);
-    const best = scored[0];
+    if (!best) {
+      return NextResponse.json(
+        { error: "Could not determine a reliable question paper structure." },
+        { status: 502 }
+      );
+    }
 
-    const totalTokens = results.reduce(
-      (sum, r) => sum + r.tokens.total,
-      0
-    );
+    const totalTokens = results.reduce((sum, r) => sum + r.tokens.total, 0);
+    const balancedCount = papers.filter(hasBalancedKeyPoints).length;
 
-    console.log("[extract-paper] selected best result:", {
-      attempt: scored.findIndex((s) => s.paper === best.paper) + 1,
-      score: best.score,
-      total_tokens_all_runs: totalTokens,
-      valid_runs: validResults.length,
+    console.log("[extract-paper] consensus selection:", {
       total_runs: RUNS,
+      valid_runs: validResults.length,
+      balanced_runs: balancedCount,
+      selected_total_max_marks: totalMaxMarks(best),
+      total_tokens_all_runs: totalTokens,
     });
 
-    return NextResponse.json(best.paper);
+    return NextResponse.json(best);
   } catch (error) {
     console.error("Extract paper error:", error);
     const message =

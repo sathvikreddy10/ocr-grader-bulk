@@ -218,18 +218,17 @@ function generateReportHtml(student: StudentRecord): string {
 </html>`;
 }
 
-function downloadReport(student: StudentRecord) {
+function openReportForPrint(student: StudentRecord) {
   if (!student.result) return;
   const html = generateReportHtml(student);
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${student.name.replace(/\s+/g, "_")}_evaluation.html`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => {
+    win.print();
+  }, 500);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1290,11 +1289,11 @@ export default function Home() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  downloadReport(student);
+                                  openReportForPrint(student);
                                 }}
                                 className="text-sm font-semibold text-emerald-600 hover:text-emerald-500"
                               >
-                                Download
+                                Print / Save PDF
                               </button>
                             </div>
                           ) : (
@@ -1321,10 +1320,10 @@ export default function Home() {
                         </h3>
                         <div className="flex items-center gap-3">
                           <button
-                            onClick={() => downloadReport(student)}
+                            onClick={() => openReportForPrint(student)}
                             className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500"
                           >
-                            Download HTML Report
+                            Print / Save PDF
                           </button>
                           <span className="rounded-lg bg-indigo-100 px-3 py-1 text-sm font-bold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300">
                             {student.result.totalScore} / {student.result.maxTotalScore}
