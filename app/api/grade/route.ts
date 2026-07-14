@@ -13,7 +13,78 @@ interface KeyPoint {
 
 interface Question {
   number?: string;
+  maxMarks?: number;
   keyPoints?: KeyPoint[];
+}
+
+interface Paper {
+  questions?: Question[];
+}
+
+interface GradedKeyPoint {
+  description: string;
+  awarded: number;
+  max: number;
+  confidence: number;
+  reason: string;
+  evidence?: string;
+}
+
+interface GradedQuestion {
+  number: string;
+  section: string;
+  score: number;
+  maxMarks: number;
+  keyPointResults: GradedKeyPoint[];
+  feedback: string;
+}
+
+interface GradeResult {
+  totalScore: number;
+  maxTotalScore: number;
+  questions: GradedQuestion[];
+}
+
+function normalizeResult(parsed: unknown, paper: Paper): GradeResult {
+  const result = parsed as Partial<GradeResult>;
+
+  const questions: GradedQuestion[] = (result.questions ?? []).map((q) => {
+    const maxMarks = Number(q.maxMarks) || 0;
+    const rawScore = Number(q.score) || 0;
+    const score = Math.min(Math.max(rawScore, 0), maxMarks);
+
+    const keyPointResults: GradedKeyPoint[] = (q.keyPointResults ?? []).map((kp) => {
+      const max = Number(kp.max) || 0;
+      const awarded = Math.min(Math.max(Number(kp.awarded) || 0, 0), max);
+      return {
+        description: String(kp.description ?? ""),
+        awarded,
+        max,
+        confidence: Math.min(Math.max(Number(kp.confidence) || 0, 0), 100),
+        reason: String(kp.reason ?? ""),
+        evidence: kp.evidence ? String(kp.evidence) : undefined,
+      };
+    });
+
+    return {
+      number: String(q.number ?? ""),
+      section: String(q.section ?? ""),
+      score,
+      maxMarks,
+      keyPointResults,
+      feedback: String(q.feedback ?? ""),
+    };
+  });
+
+  // Recalculate totals from the question paper and the awarded scores.
+  // Do not trust the LLM's totalScore or maxTotalScore.
+  const totalScore = questions.reduce((sum, q) => sum + q.score, 0);
+  const maxTotalScore = (paper.questions ?? []).reduce(
+    (sum, q) => sum + (Number(q.maxMarks) || 0),
+    0
+  );
+
+  return { totalScore, maxTotalScore, questions };
 }
 
 export async function POST(request: Request) {
@@ -163,8 +234,9 @@ Return ONLY a JSON object in this exact shape (no markdown, no commentary):
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     const jsonString = jsonMatch ? jsonMatch[0] : responseText;
     const parsed = JSON.parse(jsonString);
+    const normalized = normalizeResult(parsed, paper as Paper);
 
-    return NextResponse.json(parsed);
+    return NextResponse.json(normalized);
   } catch (error) {
     console.error("Grading error:", error);
     const message =
