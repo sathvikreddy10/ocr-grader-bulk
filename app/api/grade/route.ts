@@ -13,6 +13,7 @@ interface KeyPoint {
 
 interface Question {
   number?: string;
+  section?: string;
   maxMarks?: number;
   keyPoints?: KeyPoint[];
 }
@@ -45,36 +46,84 @@ interface GradeResult {
   questions: GradedQuestion[];
 }
 
+function buildPaperMap(paper: Paper): Map<string, Question> {
+  const map = new Map<string, Question>();
+  for (const q of paper.questions ?? []) {
+    if (q.number) {
+      map.set(String(q.number).trim(), q);
+    }
+  }
+  return map;
+}
+
 function normalizeResult(parsed: unknown, paper: Paper): GradeResult {
   const result = parsed as Partial<GradeResult>;
+  const paperMap = buildPaperMap(paper);
 
   const questions: GradedQuestion[] = (result.questions ?? []).map((q) => {
-    const maxMarks = Number(q.maxMarks) || 0;
-    const rawScore = Number(q.score) || 0;
-    const score = Math.min(Math.max(rawScore, 0), maxMarks);
+    const number = String(q.number ?? "").trim();
+    const paperQuestion = paperMap.get(number);
 
-    const keyPointResults: GradedKeyPoint[] = (q.keyPointResults ?? []).map((kp) => {
-      const max = Number(kp.max) || 0;
-      const awarded = Math.min(Math.max(Number(kp.awarded) || 0, 0), max);
+    // Hardcode maxMarks from the question paper. Never trust the LLM's maxMarks.
+    const maxMarks = Number(paperQuestion?.maxMarks) || Number(q.maxMarks) || 0;
+
+    // Build key-point results using the paper's key points as the source of truth.
+    const paperKeyPoints = paperQuestion?.keyPoints ?? [];
+    const llmKeyPoints = q.keyPointResults ?? [];
+
+    const keyPointResults: GradedKeyPoint[] = paperKeyPoints.map((paperKp, idx) => {
+      const llmKp = llmKeyPoints[idx] ?? {};
+      const max = Number(paperKp.marks) || 0;
+      const awarded = Math.min(Math.max(Number(llmKp.awarded) || 0, 0), max);
       return {
-        description: String(kp.description ?? ""),
+        description: String(paperKp.description ?? llmKp.description ?? ""),
         awarded,
         max,
-        confidence: Math.min(Math.max(Number(kp.confidence) || 0, 0), 100),
-        reason: String(kp.reason ?? ""),
-        evidence: kp.evidence ? String(kp.evidence) : undefined,
+        confidence: Math.min(Math.max(Number(llmKp.confidence) || 0, 0), 100),
+        reason: String(llmKp.reason ?? ""),
+        evidence: llmKp.evidence ? String(llmKp.evidence) : undefined,
       };
     });
 
+    // If the LLM returned extra key points beyond the paper, ignore them.
+    // If it returned fewer, the missing ones are already 0 (handled above).
+
+    const rawScore = Number(q.score) || 0;
+    const score = Math.min(Math.max(rawScore, 0), maxMarks);
+
     return {
-      number: String(q.number ?? ""),
-      section: String(q.section ?? ""),
+      number,
+      section: String(paperQuestion?.section ?? q.section ?? ""),
       score,
       maxMarks,
       keyPointResults,
       feedback: String(q.feedback ?? ""),
     };
   });
+
+  // Include any paper questions the LLM missed, scored as 0.
+  const seenNumbers = new Set(questions.map((q) => q.number));
+  for (const paperQuestion of paper.questions ?? []) {
+    const number = String(paperQuestion.number ?? "").trim();
+    if (!number || seenNumbers.has(number)) continue;
+
+    questions.push({
+      number,
+      section: String(paperQuestion.section ?? ""),
+      score: 0,
+      maxMarks: Number(paperQuestion.maxMarks) || 0,
+      keyPointResults:
+        paperQuestion.keyPoints?.map((kp) => ({
+          description: String(kp.description ?? ""),
+          awarded: 0,
+          max: Number(kp.marks) || 0,
+          confidence: 0,
+          reason: "Question not found in student answer.",
+          evidence: undefined,
+        })) ?? [],
+      feedback: "Not attempted / not found.",
+    });
+  }
 
   // Recalculate totals from the question paper and the awarded scores.
   // Do not trust the LLM's totalScore or maxTotalScore.
@@ -83,6 +132,16 @@ function normalizeResult(parsed: unknown, paper: Paper): GradeResult {
     (sum, q) => sum + (Number(q.maxMarks) || 0),
     0
   );
+
+  // Sort questions by the order they appear in the paper.
+  const paperOrder = new Map(
+    (paper.questions ?? []).map((q, i) => [String(q.number ?? "").trim(), i])
+  );
+  questions.sort((a, b) => {
+    const orderA = paperOrder.get(a.number) ?? Infinity;
+    const orderB = paperOrder.get(b.number) ?? Infinity;
+    return orderA - orderB;
+  });
 
   return { totalScore, maxTotalScore, questions };
 }
